@@ -31,7 +31,7 @@
         },
         "meta-oeros": {
             "git-remote": {
-                "uri": "https://github.com/robwoolley/meta-oeros",
+                "uri": "https://github.com/oerosproject/meta-oeros.git",
                 "branch": "wrynose",
                 "rev": "wrynose"
             }
