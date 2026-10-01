@@ -127,10 +127,11 @@ OCI_IMAGE_ENV_VARS = " \
     LANG=C.UTF-8 \
 "
 
-# GHCR links a package to the repository named here.  That only works when the
-# repository has the same owner as the package, so override this when
-# publishing under a different organisation.
-OEROS_CONTAINER_SOURCE ?= "https://github.com/robwoolley/meta-oeros"
+# The repository holding the recipes that build these images, used as
+# org.opencontainers.image.source.  GHCR links a package to the repository
+# named here, which only works when the repository has the same owner as the
+# package, so override this when publishing under a different organisation.
+OEROS_CONTAINER_SOURCE ?= "https://github.com/oerosproject/meta-oeros"
 
 OCI_IMAGE_LABELS = " \
     org.opencontainers.image.vendor=openembedded-ros \
