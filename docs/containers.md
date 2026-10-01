@@ -96,21 +96,73 @@ bitbake mc:oeros-sdk-arm64-cross:ros2-image-sdktest -c populate_sdk
 bitbake mc:oeros-sdk-arm64-cross:oeros-container-sdk-cross
 ```
 
-## Loading and pushing
+## Publishing
 
-`image-oci` deploys an OCI archive plus a directory symlink into
-`DEPLOY_DIR_IMAGE`. `scripts/oeros-container-load` wraps skopeo:
+Every image is published as `ghcr.io/oerosproject/<repository>:<tag>`, and the
+build decides both. Nothing is renamed at push time.
+
+* **Repository** — the recipe name with `oeros-container-` shortened to
+  `oeros-`: `oeros-container-ros-base` → `oeros-ros-base`.
+  `oeros-container-sdk-cross` → `oeros-sdk-cross`.
+* **Namespace** — images from the desktop multiconfigs are published under
+  `desktop/` (`desktop/oeros-ros-base`, `desktop/oeros-desktop-full`). They
+  carry x11 and commercially licensed components and are meant for
+  development workstations, not for deployment on a robot, so they never
+  share a repository with the runtime images.
+* **Tags** — per architecture, `<ROS_DISTRO>-<arch>` in OCI platform spelling
+  (`lyrical-amd64`, `lyrical-arm64`), plus a fixed copy with the build date
+  (`lyrical-amd64-20260924`) that is never moved. `lyrical` and `latest` are
+  multi-architecture indexes over the per-architecture tags, so
+  `podman pull ghcr.io/oerosproject/oeros-ros-base:lyrical` picks the right
+  one.
+* **Cross SDK** — `oeros-sdk-cross` always runs on the SDK host (amd64); its
+  tag names the *target* it builds for. `oeros-sdk-cross:lyrical-arm64` is an
+  amd64 container that builds for arm64. It has no `lyrical`/`latest` index,
+  because every tag would be the same platform.
+
+The inside of the OCI layout is always tagged `latest`
+(`<recipe>-latest-oci`): each multiconfig has its own deploy directory, and
+`oci-multiarch.bbclass` expects that name.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `OEROS_CONTAINER_NAMESPACE` | empty; `desktop/` in the desktop multiconfigs | path prefix for the repository |
+| `OEROS_CONTAINER_REPOSITORY` | `${OEROS_CONTAINER_NAMESPACE}oeros-<image>` | repository |
+| `OEROS_CONTAINER_TAG` | `${ROS_DISTRO}-<target arch>` | per-architecture tag |
+| `OEROS_CONTAINER_INDEX_TAGS` | `${ROS_DISTRO} latest`; empty for the cross SDK | multi-architecture index tags |
+| `OEROS_CONTAINER_PUBLISH` | `1` | `0` for images a multiconfig only builds as a chaining prerequisite |
+
+`OEROS_CONTAINER_PUBLISH` gives each repository and tag exactly one source.
+The SDK multiconfigs publish only their SDK images. The base, ros-core and
+ros-base images they also build come from the runtime multiconfig for the
+same `MACHINE`. The runtime and desktop multiconfigs do not publish the SDK
+images.
+
+For each published image the build writes `<recipe>-oci.publish` next to the
+layout, recording the repository and tags. `scripts/oeros-container-push` reads
+those files, pushes every image and builds the indexes:
+
+```sh
+# See what would be pushed
+scripts/oeros-container-push -n bitbake-builds/oeros-wrynose-lyrical/build
+
+# Push
+scripts/oeros-container-push bitbake-builds/oeros-wrynose-lyrical/build
+```
+
+It refuses to push if two images claim the same repository and tag. Push every
+architecture in one run; an index covers only the architectures found.
+
+## Loading locally
+
+`scripts/oeros-container-load` loads one image into podman or docker under the
+name it is published as:
 
 ```sh
 scripts/oeros-container-load \
     -d build/tmp-oeros-x86-64/deploy/images/genericx86-64 \
     oeros-container-ros-core
-# -> oeros/ros-core:lyrical-genericx86-64 in podman
-
-scripts/oeros-container-load \
-    -d build/tmp-oeros-x86-64-desktop/deploy/images/genericx86-64 \
-    -p registry.example.com/oeros/desktop-full:lyrical-genericx86-64 \
-    oeros-container-desktop-full
+# -> oeros-ros-core:lyrical-amd64 in podman
 ```
 
 ## Using with rocker
@@ -120,7 +172,7 @@ scripts/oeros-container-load \
 `packagegroup-oeros-rocker` and are labelled `io.oeros.rocker-ready=true`.
 
 ```sh
-rocker --x11 --user --home oeros/desktop-full:lyrical-genericx86-64 rviz2
+rocker --x11 --user --home ghcr.io/oerosproject/desktop/oeros-desktop-full:lyrical rviz2
 ```
 
 Supported extensions: `--user`, `--user-preserve-home`, `--home`, `--x11`,
@@ -134,7 +186,7 @@ Every ROS image has `ENTRYPOINT ["/ros_entrypoint.sh"]` and `CMD ["/bin/bash"]`,
 matching the osrf/ros convention, so upstream ROS documentation applies:
 
 ```sh
-podman run --rm oeros/ros-base:lyrical-genericx86-64 ros2 topic list
+podman run --rm ghcr.io/oerosproject/oeros-ros-base:lyrical ros2 topic list
 ```
 
 The entrypoint sources `/opt/ros/lyrical/setup.sh` when it exists and then
