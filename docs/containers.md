@@ -89,11 +89,19 @@ bitbake mc:oeros-x86-64:oeros-container-ros-base \
         mc:oeros-arm64:oeros-container-ros-base
 ```
 
-The SDK images need the SDK built first, in the same multiconfig:
+`oeros-container-sdk-cross` unpacks the `ros2-image-sdktest` SDK, so it depends
+on that SDK's `do_populate_sdk` in the same multiconfig. Building the image
+builds the SDK first, which is a long build the first time:
 
 ```sh
-bitbake mc:oeros-sdk-arm64-cross:ros2-image-sdktest -c populate_sdk
 bitbake mc:oeros-sdk-arm64-cross:oeros-container-sdk-cross
+```
+
+`oeros-container-sdk-target` does not use the SDK archive. It installs the same
+packages onto `ros-base`, so nothing extra is built for it:
+
+```sh
+bitbake mc:oeros-sdk-arm64-target:oeros-container-sdk-target
 ```
 
 ## Publishing
