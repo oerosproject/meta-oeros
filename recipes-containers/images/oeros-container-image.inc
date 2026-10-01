@@ -100,19 +100,28 @@ index_tags=${OEROS_CONTAINER_INDEX_TAGS}
 EOF
 }
 
-OCI_IMAGE_AUTHOR ?= "OpenEmbedded ROS"
-OCI_IMAGE_AUTHOR_EMAIL ?= "${MAINTAINER}"
+# Hard assignments, not "?=": image-oci.bbclass has already run (inherit above)
+# and set its own "?=" defaults for every OCI_IMAGE_* variable below, so a weak
+# assignment here would never take effect -- which is how these images
+# originally shipped with no entrypoint, no ROS_DISTRO in their environment and
+# none of the labels below.  Recipes that want something different assign with
+# "=" (or ":append") after "require", which still overrides these.
+OCI_IMAGE_AUTHOR = "OpenEmbedded ROS"
+# image-oci-umoci.inc expands this unquoted into "umoci config --author ...", so
+# it must be shell-safe: MAINTAINER is "Name <address>", whose "<" the shell
+# would read as a redirection.  Pass only the address.
+OCI_IMAGE_AUTHOR_EMAIL = "${@d.getVar('MAINTAINER').rpartition('<')[2].rstrip('>').strip()}"
 
 # Mirrors the convention osrf/ros established: ENTRYPOINT sources the ROS
 # environment and execs whatever it is handed, CMD is an interactive shell that
 # a "docker run <image> ros2 topic list" replaces.  Keeping this identical to
 # the Docker Hub images means existing tutorials and rocker invocations work
 # against these images unchanged.
-OCI_IMAGE_ENTRYPOINT ?= "/ros_entrypoint.sh"
-OCI_IMAGE_CMD ?= "/bin/bash"
+OCI_IMAGE_ENTRYPOINT = "/ros_entrypoint.sh"
+OCI_IMAGE_CMD = "/bin/bash"
 
 # Space-separated key=value: values may not themselves contain spaces.
-OCI_IMAGE_ENV_VARS ?= " \
+OCI_IMAGE_ENV_VARS = " \
     ROS_DISTRO=${ROS_DISTRO} \
     ROS_VERSION=2 \
     LANG=C.UTF-8 \
@@ -123,7 +132,7 @@ OCI_IMAGE_ENV_VARS ?= " \
 # publishing under a different organisation.
 OEROS_CONTAINER_SOURCE ?= "https://github.com/robwoolley/meta-oeros"
 
-OCI_IMAGE_LABELS ?= " \
+OCI_IMAGE_LABELS = " \
     org.opencontainers.image.vendor=openembedded-ros \
     org.opencontainers.image.title=${OEROS_CONTAINER_REPOSITORY} \
     org.opencontainers.image.source=${OEROS_CONTAINER_SOURCE} \
