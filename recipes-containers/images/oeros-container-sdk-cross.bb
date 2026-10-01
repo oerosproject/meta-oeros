@@ -26,6 +26,13 @@ PACKAGE_INSTALL = ""
 # of a cross SDK: the container runs on the SDK host.
 OCI_IMAGE_ARCH = "${@oe.go.map_arch(d.getVar('SDK_ARCH'))}"
 
+# Every tag of this image runs on the same SDK host architecture and only the
+# target it builds for differs, so the per-target tags (lyrical-amd64,
+# lyrical-arm64) cannot be combined into one multi-architecture index: a
+# runtime would see several entries for the same platform and pick one at
+# random.
+OEROS_CONTAINER_INDEX_TAGS = ""
+
 # create_shar deletes ${TOOLCHAIN_OUTPUTNAME}.${SDK_ARCHIVE_TYPE} once it has
 # appended it to the self-extracting installer, so the plain archive only
 # survives when the shar step is disabled.  The SDK multiconfigs do that with

@@ -46,9 +46,59 @@ IMAGE_LINGUAS = ""
 # "Base image not found at expected path" abort; suppress it.
 ROS_IMAGE_BASENAME_APPEND = ""
 
-OEROS_CONTAINER_TAG ?= "${ROS_DISTRO}-${MACHINE}"
-OCI_IMAGE_TAG ?= "${OEROS_CONTAINER_TAG}"
-OCI_BASE_IMAGE_TAG ?= "${OEROS_CONTAINER_TAG}"
+# The tag inside the OCI layout stays at image-oci's default of "latest".
+# oci-multiarch.bbclass only finds layouts named <recipe>-latest-oci, and each
+# multiconfig already has its own DEPLOY_DIR_IMAGE, so the layout tag has
+# nothing to tell apart.  The tags that mean something to a user --
+# distribution and architecture -- are applied when the image is pushed; see
+# OEROS_CONTAINER_TAG below.
+#
+# (An earlier version set OCI_IMAGE_TAG ?= "${ROS_DISTRO}-${MACHINE}" here.
+# It never took effect: the "inherit image-oci" above had already set
+# OCI_IMAGE_TAG ?= "latest", and the first weak assignment wins.)
+
+# Where the image is published, relative to the registry
+# (e.g. ghcr.io/oerosproject/).  The repository is the recipe name with
+# "oeros-container-" shortened to "oeros-", so oeros-container-ros-base is
+# published as oeros-ros-base.  OEROS_CONTAINER_NAMESPACE puts every image of
+# a multiconfig under a separate path -- the desktop multiconfigs use it to
+# keep their x11 and commercially licensed builds apart from the images meant
+# for deployment on a robot.
+OEROS_CONTAINER_NAMESPACE ?= ""
+OEROS_CONTAINER_REPOSITORY ?= "${OEROS_CONTAINER_NAMESPACE}${@d.getVar('PN').replace('oeros-container-', 'oeros-', 1)}"
+
+# Per-architecture tag, e.g. lyrical-amd64.  The architecture is that of the
+# target the image is for, in OCI platform spelling.  For every image except
+# oeros-container-sdk-cross that is also the architecture the container runs
+# on; the cross SDK runs on SDK_ARCH but still builds for TARGET_ARCH, so its
+# tag names the target.
+OEROS_CONTAINER_TAG ?= "${ROS_DISTRO}-${@oe.go.map_arch(d.getVar('TARGET_ARCH'))}"
+
+# Tags given to the multi-architecture index that combines every
+# OEROS_CONTAINER_TAG pushed to the same repository.  Empty for an image whose
+# per-architecture tags do not differ in runtime platform (the cross SDK).
+OEROS_CONTAINER_INDEX_TAGS ?= "${ROS_DISTRO} latest"
+
+# Set to "0" in a multiconfig that builds an image only as a chaining
+# prerequisite, so that each repository and tag has exactly one source.
+OEROS_CONTAINER_PUBLISH ?= "1"
+
+# Record the publishing metadata next to the layout, for
+# scripts/oeros-container-push.  Written only for images that are published,
+# so the presence of the file is the decision.
+IMAGE_POSTPROCESS_COMMAND += "oeros_container_write_publish ; "
+oeros_container_write_publish () {
+    if [ "${OEROS_CONTAINER_PUBLISH}" != "1" ]; then
+        return
+    fi
+    cat > ${IMGDEPLOYDIR}/${IMAGE_BASENAME}-oci.publish <<EOF
+layout=${IMAGE_BASENAME}-${OCI_IMAGE_TAG}-oci
+layout_tag=${OCI_IMAGE_TAG}
+repository=${OEROS_CONTAINER_REPOSITORY}
+tag=${OEROS_CONTAINER_TAG}
+index_tags=${OEROS_CONTAINER_INDEX_TAGS}
+EOF
+}
 
 OCI_IMAGE_AUTHOR ?= "OpenEmbedded ROS"
 OCI_IMAGE_AUTHOR_EMAIL ?= "${MAINTAINER}"
@@ -68,9 +118,15 @@ OCI_IMAGE_ENV_VARS ?= " \
     LANG=C.UTF-8 \
 "
 
+# GHCR links a package to the repository named here.  That only works when the
+# repository has the same owner as the package, so override this when
+# publishing under a different organisation.
+OEROS_CONTAINER_SOURCE ?= "https://github.com/robwoolley/meta-oeros"
+
 OCI_IMAGE_LABELS ?= " \
     org.opencontainers.image.vendor=openembedded-ros \
-    org.opencontainers.image.title=${PN} \
+    org.opencontainers.image.title=${OEROS_CONTAINER_REPOSITORY} \
+    org.opencontainers.image.source=${OEROS_CONTAINER_SOURCE} \
     io.oeros.ros-distro=${ROS_DISTRO} \
     io.oeros.machine=${MACHINE} \
 "
