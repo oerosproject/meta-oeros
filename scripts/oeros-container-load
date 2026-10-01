@@ -18,11 +18,14 @@ Usage: $0 [options] <image-recipe>
   -d DIR    Deploy directory to read from.
             Default: \$DEPLOY_DIR_IMAGE, else tmp-<mc>/deploy/images/<machine>
   -t TAG    Tag in the OCI layout to use. Default: the only tag present.
-  -n NAME   Name to give the image locally. Default: oeros/<recipe minus the
-            oeros-container- prefix>
+  -n NAME   Name and tag to give the image locally. Default: the repository
+            and tag the image is published under (from <recipe>-oci.publish),
+            e.g. oeros-ros-base:lyrical-amd64, else oeros-<recipe minus the
+            oeros-container- prefix>:latest
   -e ENGINE docker | podman. Default: whichever is found first.
   -p DEST   Push to this destination instead of loading locally, e.g.
-            registry.example.com/oeros/ros-core:lyrical-genericx86-64
+            registry.example.com/oeros-ros-core:lyrical-amd64
+            (scripts/oeros-container-push pushes every image of a build.)
   -h        This message.
 
 Examples:
@@ -31,7 +34,7 @@ Examples:
 
   # Push the desktop-full container to a registry
   $0 -d build/tmp-oeros-x86-64-desktop/deploy/images/genericx86-64 \\
-     -p registry.example.com/oeros/desktop-full:lyrical-genericx86-64 \\
+     -p registry.example.com/desktop/oeros-desktop-full:lyrical-amd64 \\
      oeros-container-desktop-full
 EOF
 }
@@ -85,7 +88,12 @@ if [ -z "$tag" ]; then
 fi
 
 if [ -z "$name" ]; then
-    name="oeros/$(echo "$recipe" | sed -e 's|^oeros-container-||')"
+    publish="$deploy_dir/$recipe-oci.publish"
+    if [ -f "$publish" ]; then
+        name="$(sed -n 's|^repository=||p' "$publish"):$(sed -n 's|^tag=||p' "$publish")"
+    else
+        name="oeros-$(echo "$recipe" | sed -e 's|^oeros-container-||'):latest"
+    fi
 fi
 
 src="oci-archive:$archive:$tag"
@@ -106,10 +114,10 @@ fi
 
 case "$engine" in
     podman)
-        dest="containers-storage:$name:$tag"
+        dest="containers-storage:$name"
         ;;
     docker)
-        dest="docker-daemon:$name:$tag"
+        dest="docker-daemon:$name"
         ;;
     "")
         echo "$0: neither podman nor docker found; use -e or -p" >&2
@@ -121,6 +129,6 @@ case "$engine" in
         ;;
 esac
 
-echo "Loading $archive ($tag) as $name:$tag into $engine"
+echo "Loading $archive ($tag) as $name into $engine"
 skopeo copy "$src" "$dest"
-echo "Done: $name:$tag"
+echo "Done: $name"

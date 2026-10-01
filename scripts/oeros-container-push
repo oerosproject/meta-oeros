@@ -1,0 +1,167 @@
+#!/bin/sh
+#
+# Copyright (c) 2026 Wind River Systems, Inc.
+#
+# Push every publishable OEROS container image in a build directory to a
+# registry, then combine the per-architecture tags of each repository into a
+# multi-architecture index.
+#
+# Nothing here decides names.  oeros-container-image.inc writes an
+# "<recipe>-oci.publish" file next to each OCI layout it builds -- only for
+# images whose multiconfig publishes them -- recording the repository and
+# tags.  This script reads those files and copies the layouts as they are.
+
+set -eu
+
+registry="ghcr.io/oerosproject"
+authfile=""
+dry_run=""
+
+usage() {
+    cat <<EOF
+Usage: $0 [options] <build-dir-or-deploy-dir>...
+
+  -r REGISTRY  Registry and path to push under. Default: $registry
+  -a AUTHFILE  Credentials file for skopeo and podman.
+               Default: their own default (\${XDG_RUNTIME_DIR}/containers/auth.json).
+  -n           Print what would be pushed, push nothing.
+  -h           This message.
+
+Every image gets two tags: the per-architecture tag recorded at build time
+(e.g. lyrical-amd64) and the same with the build date appended
+(lyrical-amd64-20260924), which is never moved.  Each repository whose images
+declare index tags then gets a multi-architecture index under those tags
+(e.g. lyrical and latest), built from the per-architecture tags pushed in this
+run.  Push every architecture in one run, or the index will cover only the
+ones found.
+
+Example:
+  $0 -n bitbake-builds/oeros-wrynose-lyrical/build
+EOF
+}
+
+while getopts "r:a:nh" opt; do
+    case "$opt" in
+        r) registry="${OPTARG%/}" ;;
+        a) authfile="$OPTARG" ;;
+        n) dry_run=1 ;;
+        h) usage; exit 0 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+done
+shift $((OPTIND - 1))
+
+if [ $# -lt 1 ]; then
+    usage >&2
+    exit 2
+fi
+
+for tool in skopeo; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "$0: $tool is required" >&2
+        exit 1
+    fi
+done
+
+auth_opt=""
+if [ -n "$authfile" ]; then
+    auth_opt="--authfile $authfile"
+fi
+
+run() {
+    echo "+ $*"
+    if [ -z "$dry_run" ]; then
+        "$@"
+    fi
+}
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+find "$@" -name '*-oci.publish' -type f | sort > "$work/publish-files"
+if [ ! -s "$work/publish-files" ]; then
+    echo "$0: no *-oci.publish files under $*; have the images been built?" >&2
+    exit 1
+fi
+
+# Read one key from a .publish file without sourcing it.
+publish_value() {
+    sed -n "s|^$2=||p" "$1" | head -n 1
+}
+
+# First pass: validate everything before pushing anything.  Two multiconfigs
+# claiming the same repository and tag would otherwise silently overwrite one
+# another, with the result depending on the order find returned them in.
+: > "$work/plan"
+while read -r publish; do
+    dir=$(dirname "$publish")
+    layout="$dir/$(publish_value "$publish" layout)"
+    layout_tag=$(publish_value "$publish" layout_tag)
+    repository=$(publish_value "$publish" repository)
+    tag=$(publish_value "$publish" tag)
+    index_tags=$(publish_value "$publish" index_tags)
+
+    if [ ! -f "$layout/index.json" ]; then
+        echo "$0: $publish names $layout, which is not an OCI layout" >&2
+        exit 1
+    fi
+
+    previous=$(awk -v key="$repository:$tag" '$1 == key { print $2 }' "$work/plan")
+    if [ -n "$previous" ]; then
+        echo "$0: $repository:$tag is published by both" >&2
+        echo "    $previous" >&2
+        echo "    $layout" >&2
+        echo "    Set OEROS_CONTAINER_PUBLISH = \"0\" for one of them." >&2
+        exit 1
+    fi
+
+    # The date is that of the build, not of this push.  The image config's
+    # "created" field is no use for this: reproducible builds pin it to
+    # SOURCE_DATE_EPOCH.  The layout symlink points at the timestamped
+    # directory image.bbclass named after IMAGE_VERSION_SUFFIX, so use that,
+    # and fall back to the .publish file's own modification time if
+    # IMAGE_VERSION_SUFFIX has been changed to something without a timestamp.
+    date_tag=$(basename "$(readlink -f "$layout")" | sed -n 's|.*[^0-9]\([0-9]\{8\}\)[0-9]\{6\}[^0-9].*|\1|p')
+    if [ -z "$date_tag" ]; then
+        date_tag=$(date -r "$publish" +%Y%m%d)
+    fi
+
+    # index_tags is last because it is the only field that can hold spaces.
+    echo "$repository:$tag $layout $layout_tag $repository $tag $date_tag $index_tags" >> "$work/plan"
+done < "$work/publish-files"
+
+# Second pass: push.
+while read -r key layout layout_tag repository tag date_tag index_tags; do
+    for t in "$tag" "$tag-$date_tag"; do
+        # shellcheck disable=SC2086
+        run skopeo copy $auth_opt "oci:$layout:$layout_tag" "docker://$registry/$repository:$t"
+    done
+    if [ -n "$index_tags" ]; then
+        echo "$registry/$repository:$tag" >> "$work/index-members-$(echo "$repository" | tr '/' '_')"
+        echo "$repository $index_tags" >> "$work/indexes"
+    fi
+done < "$work/plan"
+
+[ -f "$work/indexes" ] || exit 0
+
+if ! command -v podman >/dev/null 2>&1; then
+    echo "$0: podman is required to create multi-architecture indexes" >&2
+    exit 1
+fi
+
+# Third pass: one index per repository.  podman reads each member's config to
+# fill in its platform, which the single-architecture layouts image-oci writes
+# leave out of their own index.json.
+sort -u "$work/indexes" | while read -r repository index_tags; do
+    list="localhost/oeros-push-index/$repository"
+    run podman manifest create "$list"
+    while read -r member; do
+        # shellcheck disable=SC2086
+        run podman manifest add $auth_opt "$list" "docker://$member"
+    done < "$work/index-members-$(echo "$repository" | tr '/' '_')"
+    for t in $index_tags; do
+        # shellcheck disable=SC2086
+        run podman manifest push $auth_opt --all "$list" "docker://$registry/$repository:$t"
+    done
+    run podman manifest rm "$list"
+done
