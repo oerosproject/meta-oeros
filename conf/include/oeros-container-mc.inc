@@ -33,11 +33,6 @@ INITRAMFS_IMAGE_BUNDLE = "0"
 # the umoci backend; sloci-image raises a hard error on OCI_BASE_IMAGE.
 OCI_IMAGE_BACKEND = "umoci"
 
-# Tag applied to every image built in this multiconfig, and the tag each image
-# looks for in the OCI layout of its parent.  Keeping these equal is what makes
-# OCI_BASE_IMAGE chaining resolve -- see recipes-containers/images/oeros-container-image.inc.
-OEROS_CONTAINER_TAG ?= "${ROS_DISTRO}-${MACHINE}"
-
 # A long list of ordinary packages -- confirmed so far: iptables (both its
 # own RRECOMMENDS:${PN} and an extra ~14 kernel-module-* tokens appended by
 # meta-virtualization/recipes-extended/iptables/iptables-meta-virtualization.inc,
