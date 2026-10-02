@@ -161,6 +161,13 @@ scripts/oeros-container-push bitbake-builds/oeros-wrynose-lyrical/build
 It refuses to push if two images claim the same repository and tag. Push every
 architecture in one run; an index covers only the architectures found.
 
+Each image's dated tag uses its own build date, in UTC, so one release can end up
+with two dates. Pass `-d YYYYMMDD` to give every image the same one:
+
+```sh
+scripts/oeros-container-push -d 20261001 bitbake-builds/oeros-wrynose-lyrical/build/tmp-*/deploy/images/*/
+```
+
 ## Loading locally
 
 `scripts/oeros-container-load` loads one image into podman or docker under the

@@ -16,6 +16,7 @@ set -eu
 registry="ghcr.io/oerosproject"
 authfile=""
 dry_run=""
+pin_date=""
 
 usage() {
     cat <<EOF
@@ -24,12 +25,16 @@ Usage: $0 [options] <build-dir-or-deploy-dir>...
   -r REGISTRY  Registry and path to push under. Default: $registry
   -a AUTHFILE  Credentials file for skopeo and podman.
                Default: their own default (\${XDG_RUNTIME_DIR}/containers/auth.json).
+  -d DATE      Use this YYYYMMDD for every dated tag, instead of each image's own
+               build date. The build date is in UTC and one release can span two of
+               them; pin it so every image from a release carries the same tag.
   -n           Print what would be pushed, push nothing.
   -h           This message.
 
 Every image gets two tags: the per-architecture tag recorded at build time
 (e.g. lyrical-amd64) and the same with the build date appended
-(lyrical-amd64-20260924), which is never moved.  Each repository whose images
+(lyrical-amd64-20260924), which is never moved. The date is the image's own
+build date unless -d gives one.  Each repository whose images
 declare index tags then gets a multi-architecture index under those tags
 (e.g. lyrical and latest), built from the per-architecture tags pushed in this
 run.  Push every architecture in one run, or the index will cover only the
@@ -40,10 +45,11 @@ Example:
 EOF
 }
 
-while getopts "r:a:nh" opt; do
+while getopts "r:a:d:nh" opt; do
     case "$opt" in
         r) registry="${OPTARG%/}" ;;
         a) authfile="$OPTARG" ;;
+        d) pin_date="$OPTARG" ;;
         n) dry_run=1 ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -55,6 +61,11 @@ if [ $# -lt 1 ]; then
     usage >&2
     exit 2
 fi
+
+case "$pin_date" in
+    "" | [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) ;;
+    *) echo "$0: -d takes a date as YYYYMMDD, not '$pin_date'" >&2; exit 2 ;;
+esac
 
 for tool in skopeo; do
     if ! command -v "$tool" >/dev/null 2>&1; then
@@ -124,6 +135,9 @@ while read -r publish; do
     date_tag=$(basename "$(readlink -f "$layout")" | sed -n 's|.*[^0-9]\([0-9]\{8\}\)[0-9]\{6\}[^0-9].*|\1|p')
     if [ -z "$date_tag" ]; then
         date_tag=$(date -r "$publish" +%Y%m%d)
+    fi
+    if [ -n "$pin_date" ]; then
+        date_tag="$pin_date"
     fi
 
     # index_tags is last because it is the only field that can hold spaces.
