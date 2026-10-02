@@ -17,6 +17,7 @@ registry="ghcr.io/oerosproject"
 authfile=""
 dry_run=""
 pin_date=""
+indexes_only=""
 
 usage() {
     cat <<EOF
@@ -28,6 +29,8 @@ Usage: $0 [options] <build-dir-or-deploy-dir>...
   -d DATE      Use this YYYYMMDD for every dated tag, instead of each image's own
                build date. The build date is in UTC and one release can span two of
                them; pin it so every image from a release carries the same tag.
+  -i           Only rebuild and push the multi-architecture indexes. Assumes
+               the per-architecture images are already in the registry.
   -n           Print what would be pushed, push nothing.
   -h           This message.
 
@@ -45,11 +48,12 @@ Example:
 EOF
 }
 
-while getopts "r:a:d:nh" opt; do
+while getopts "r:a:d:inh" opt; do
     case "$opt" in
         r) registry="${OPTARG%/}" ;;
         a) authfile="$OPTARG" ;;
         d) pin_date="$OPTARG" ;;
+        i) indexes_only=1 ;;
         n) dry_run=1 ;;
         h) usage; exit 0 ;;
         *) usage >&2; exit 2 ;;
@@ -67,7 +71,7 @@ case "$pin_date" in
     *) echo "$0: -d takes a date as YYYYMMDD, not '$pin_date'" >&2; exit 2 ;;
 esac
 
-for tool in skopeo; do
+for tool in skopeo jq; do
     if ! command -v "$tool" >/dev/null 2>&1; then
         echo "$0: $tool is required" >&2
         exit 1
@@ -140,18 +144,28 @@ while read -r publish; do
         date_tag="$pin_date"
     fi
 
+    # The repository the image was built from, from its own label. It goes
+    # on the index too: GHCR links a multi-platform package to a repository
+    # from an annotation on the index, and ignores the platform images' labels.
+    source=$(skopeo inspect --config "oci:$layout:$layout_tag" |
+        jq -r '.config.Labels["org.opencontainers.image.source"] // empty')
+
     # index_tags is last because it is the only field that can hold spaces.
-    echo "$repository:$tag $layout $layout_tag $repository $tag $date_tag $index_tags" >> "$work/plan"
+    echo "$repository:$tag $layout $layout_tag $repository $tag $date_tag ${source:--} $index_tags" >> "$work/plan"
 done < "$work/publish-files"
 
 # Second pass: push.
-while read -r key layout layout_tag repository tag date_tag index_tags; do
-    for t in "$tag" "$tag-$date_tag"; do
-        # shellcheck disable=SC2086
-        run skopeo copy $auth_opt "oci:$layout:$layout_tag" "docker://$registry/$repository:$t"
-    done
+while read -r key layout layout_tag repository tag date_tag source index_tags; do
+    if [ -z "$indexes_only" ]; then
+        for t in "$tag" "$tag-$date_tag"; do
+            # shellcheck disable=SC2086
+            run skopeo copy $auth_opt "oci:$layout:$layout_tag" "docker://$registry/$repository:$t"
+        done
+    fi
     if [ -n "$index_tags" ]; then
-        echo "$registry/$repository:$tag" >> "$work/index-members-$(echo "$repository" | tr '/' '_')"
+        key=$(echo "$repository" | tr '/' '_')
+        echo "$registry/$repository:$tag" >> "$work/index-members-$key"
+        echo "$source" > "$work/index-source-$key"
         echo "$repository $index_tags" >> "$work/indexes"
     fi
 done < "$work/plan"
@@ -173,6 +187,11 @@ sort -u "$work/indexes" | while read -r repository index_tags; do
         # shellcheck disable=SC2086
         run podman manifest add $auth_opt "$list" "docker://$member"
     done < "$work/index-members-$(echo "$repository" | tr '/' '_')"
+    source=$(cat "$work/index-source-$(echo "$repository" | tr '/' '_')")
+    if [ "$source" != "-" ]; then
+        run podman manifest annotate --index \
+            --annotation "org.opencontainers.image.source=$source" "$list"
+    fi
     for t in $index_tags; do
         # shellcheck disable=SC2086
         run podman manifest push $auth_opt --all "$list" "docker://$registry/$repository:$t"

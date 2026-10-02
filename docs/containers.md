@@ -168,6 +168,13 @@ with two dates. Pass `-d YYYYMMDD` to give every image the same one:
 scripts/oeros-container-push -d 20261001 bitbake-builds/oeros-wrynose-lyrical/build/tmp-*/deploy/images/*/
 ```
 
+Each index is annotated with `org.opencontainers.image.source`, copied from the
+images' own label. GHCR links a multi-platform package to a repository from the
+index annotation and ignores the label on the platform images. `-i` rebuilds
+and pushes only the indexes, for images that are already in the registry.
+`oeros-sdk-cross` has no index, so GHCR does not link it; connect it to the
+repository in the package's settings.
+
 ## Loading locally
 
 `scripts/oeros-container-load` loads one image into podman or docker under the
