@@ -1,0 +1,97 @@
+# Runs the Yocto Project's yocto-check-layer script against meta-oeros.
+#
+# The layer's dependencies (from LAYERDEPENDS in conf/layer.conf) are cloned
+# next to it, at the URIs and branches listed in the bitbake-setup
+# configuration below, so CI checks against the same layer set Oeros builds
+# with. yocto-check-layer only parses recipes and computes task signatures, so
+# nothing is fetched or built and there are no downloads or sstate to cache.
+name: yocto-check-layer
+
+on:
+  pull_request:
+  push:
+    branches: [wrynose]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # bitbake-setup configuration that pins the layer sources for this branch
+  OEROS_CONFIG: conf/registry/configurations/oeros-wrynose-lyrical.conf.json
+  # Sources from that configuration needed to satisfy LAYERDEPENDS
+  DEPENDENCY_SOURCES: bitbake openembedded-core meta-openembedded meta-virtualization meta-ros
+
+jobs:
+  yocto-check-layer:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out meta-oeros
+        uses: actions/checkout@v4
+        with:
+          path: meta-oeros
+
+      - name: Install build host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential chrpath cpio debianutils diffstat file gawk gcc \
+            git iputils-ping jq libacl1 liblz4-tool locales python3 \
+            python3-git python3-jinja2 python3-pexpect python3-subunit \
+            socat texinfo unzip wget xz-utils zstd
+          sudo locale-gen en_US.UTF-8
+          # BitBake needs unprivileged user namespaces, which Ubuntu 24.04
+          # restricts through AppArmor by default
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+
+      - name: Clone dependency layers
+        run: |
+          config="meta-oeros/$OEROS_CONFIG"
+          compat=$(sed -n 's/^LAYERSERIES_COMPAT_oeros *= *"\(.*\)"/\1/p' meta-oeros/conf/layer.conf)
+          core_branch=$(jq -r '.sources["openembedded-core"]["git-remote"].branch' "$config")
+          if ! grep -qw "$core_branch" <<<"$compat"; then
+            echo "::error::$OEROS_CONFIG uses openembedded-core $core_branch but LAYERSERIES_COMPAT_oeros is \"$compat\""
+            exit 1
+          fi
+          mkdir -p layers
+          for source in $DEPENDENCY_SOURCES; do
+            uri=$(jq -r --arg s "$source" '.sources[$s]["git-remote"].uri' "$config")
+            branch=$(jq -r --arg s "$source" '.sources[$s]["git-remote"].branch' "$config")
+            echo "::group::$source ($branch)"
+            for attempt in 1 2 3; do
+              git clone --depth 1 --branch "$branch" "$uri" "layers/$source" && break
+              rm -rf "layers/$source"
+              sleep $((attempt * 10))
+            done
+            git -C "layers/$source" log -1 --format='%H %s'
+            echo "::endgroup::"
+          done
+
+      - name: Run yocto-check-layer
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          export BITBAKEDIR="$GITHUB_WORKSPACE/layers/bitbake"
+          source layers/openembedded-core/oe-init-build-env build
+          yocto-check-layer \
+            --no-auto-dependency \
+            --output-log "$GITHUB_WORKSPACE/yocto-check-layer.log" \
+            --dependency \
+              ../layers/meta-openembedded \
+              ../layers/meta-virtualization \
+              ../layers/meta-ros \
+            -- ../meta-oeros
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yocto-check-layer-log
+          path: yocto-check-layer.log
+          if-no-files-found: ignore
